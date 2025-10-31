@@ -1,5 +1,5 @@
 """
-TraderMCP FastMCP Server
+IBTraderMCP FastMCP Server
 Interactive Brokers MCP Server for trading and market data
 """
 import asyncio
@@ -61,7 +61,7 @@ from src.logger import logger
 from src.config import get_config
 
 # Create FastMCP server
-mcp = FastMCP("TraderMCP")
+mcp = FastMCP("IBTraderMCP")
 
 # Get instances
 ib_client = get_ib_client()
@@ -73,7 +73,7 @@ config = get_config()
 @mcp.event("startup")
 async def startup():
     """Connect to IB Gateway on startup"""
-    logger.info("TraderMCP server starting...")
+    logger.info("IBTraderMCP server starting...")
     logger.info(f"Connecting to IB Gateway at {config.ib.host}:{config.ib.port}...")
     
     success = await ib_client.connect()
@@ -86,7 +86,7 @@ async def startup():
 @mcp.event("shutdown")
 async def shutdown():
     """Disconnect from IB Gateway on shutdown"""
-    logger.info("TraderMCP server shutting down...")
+    logger.info("IBTraderMCP server shutting down...")
     ib_client.disconnect()
     logger.info("Disconnected from IB Gateway")
 
@@ -675,5 +675,5 @@ async def analyst_reports(symbol: str) -> dict:
 # ==================== Server Runner ====================
 
 if __name__ == "__main__":
-    logger.info("Starting TraderMCP server...")
+    logger.info("Starting IBTraderMCP server...")
     mcp.run()

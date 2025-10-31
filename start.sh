@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# TraderMCP 启动脚本
+# IBTraderMCP 启动脚本
 
 echo "========================================="
-echo "  TraderMCP - Interactive Brokers MCP"
+echo "  IBTraderMCP - Interactive Brokers MCP"
 echo "========================================="
 echo ""
 
@@ -43,7 +43,7 @@ echo "按 Enter 键继续启动服务器，或 Ctrl+C 取消..."
 read
 
 echo ""
-echo "正在启动 TraderMCP 服务器..."
+echo "正在启动 IBTraderMCP 服务器..."
 echo ""
 
 # 启动服务器

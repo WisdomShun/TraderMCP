@@ -1,6 +1,6 @@
 """
-TraderMCP 使用示例
-演示如何使用 TraderMCP 进行账户查询、数据获取和交易操作
+IBTraderMCP 使用示例
+演示如何使用 IBTraderMCP 进行账户查询、数据获取和交易操作
 """
 import asyncio
 from src.ib_client import get_ib_client

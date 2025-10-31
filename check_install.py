@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-快速验证 TraderMCP 安装和配置
+快速验证 IBTraderMCP 安装和配置
 """
 import sys
 import os
@@ -124,7 +124,7 @@ def check_modules():
 def main():
     """主函数"""
     print("="*60)
-    print("  TraderMCP 安装验证")
+    print("  IBTraderMCP 安装验证")
     print("="*60)
     print()
     

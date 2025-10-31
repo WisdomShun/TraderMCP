@@ -1,5 +1,5 @@
 """
-Trading tools for TraderMCP
+Trading tools for IBTraderMCP
 """
 
 __all__ = []

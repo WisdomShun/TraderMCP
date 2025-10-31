@@ -1,4 +1,4 @@
-# TraderMCP - Interactive Brokers MCP Server
+# IBTraderMCP - Interactive Brokers MCP Server
 
 基于 FastMCP 框架的 Interactive Brokers 交易服务器，提供完整的账户查询、交易执行、市场数据获取和风险管理功能。
 
@@ -81,8 +81,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/WisdomShun/TraderMCP.git
-cd TraderMCP
+git clone https://github.com/WisdomShun/IBTraderMCP.git
+cd IBTraderMCP
 
 # 安装依赖
 pip install -e .
@@ -245,7 +245,7 @@ await cancel_order_by_id(
 ## 🗂️ 项目结构
 
 ```
-TraderMCP/
+IBTraderMCP/
 ├── src/
 │   ├── __init__.py
 │   ├── server.py              # FastMCP服务器主入口

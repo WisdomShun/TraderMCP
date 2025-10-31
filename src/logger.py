@@ -1,5 +1,5 @@
 """
-Logging utilities for TraderMCP
+Logging utilities for IBTraderMCP
 """
 import logging
 import sys
@@ -24,7 +24,7 @@ class Logger:
     def _setup_logger(self):
         """Setup logging configuration"""
         config = get_config()
-        self._logger = logging.getLogger("TraderMCP")
+        self._logger = logging.getLogger("IBTraderMCP")
         self._logger.setLevel(getattr(logging, config.log_level))
         
         # Remove existing handlers
@@ -42,7 +42,7 @@ class Logger:
         
         # File handler
         log_dir = config.log_dir
-        log_file = log_dir / f"tradermcp_{datetime.now().strftime('%Y%m%d')}.log"
+        log_file = log_dir / f"IBTraderMCP_{datetime.now().strftime('%Y%m%d')}.log"
         if True:  # Always log to file
             file_handler = logging.FileHandler(log_file, encoding='utf-8')
             file_handler.setLevel(getattr(logging, config.log_level))
