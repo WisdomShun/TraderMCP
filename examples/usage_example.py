@@ -3,13 +3,16 @@ IBTraderMCP 使用示例
 演示如何使用 IBTraderMCP 进行账户查询、数据获取和交易操作
 """
 import asyncio
+import nest_asyncio
+nest_asyncio.apply()
+
 from src.ib_client import get_ib_client
 from src.tools.account import get_account_summary, get_cash_balance
 from src.tools.positions import get_positions, get_position_summary
 from src.tools.orders import place_order, get_open_orders, cancel_order
 from src.tools.market_data import get_daily_kline
 from src.tools.quotes import get_last_price
-from src.tools.options import get_option_chain, find_options_by_delta
+from src.tools.options import get_option_chain
 from src.tools.calendar import get_trading_calendar, is_trading_day
 from src.logger import logger
 
@@ -139,22 +142,6 @@ async def example_options():
     
     print("\n演示：查找特定Delta的期权")
     print("目标Delta: 0.30 (30 delta)")
-    
-    # 从缓存查找（如果之前查询过）
-    # target_delta_options = await find_options_by_delta(
-    #     symbol=symbol,
-    #     target_delta=0.30,
-    #     delta_range=0.05
-    # )
-    # 
-    # if target_delta_options:
-    #     print(f"找到 {len(target_delta_options)} 个符合条件的期权")
-    #     for opt in target_delta_options[:3]:  # 显示前3个
-    #         print(f"\n  {opt['contract_symbol']}")
-    #         print(f"    Delta: {opt['delta']:.4f}")
-    #         print(f"    Gamma: {opt['gamma']:.4f}")
-    #         print(f"    Theta: {opt['theta']:.4f}")
-    #         print(f"    IV: {opt['implied_volatility']:.2%}")
 
 
 async def example_calendar():
