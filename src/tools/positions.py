@@ -1,122 +1,133 @@
 """
 Position management tools
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
+from ib_insync import Position, PortfolioItem
 from src.ib_client import get_ib_client
 from src.logger import logger
+from src.models import PositionSummary, StockInfo, PositionStock, OptionInfo, PositionOption
 
 ib_client = get_ib_client()
 
 
-async def get_positions(asset_type: Optional[str] = "ALL") -> List[Dict[str, Any]]:
+async def _get_positions(asset_type: Optional[str] = "ALL") -> List[PortfolioItem]:
     """
-    获取仓位信息
+    获取仓位信息（返回原生 ib_insync PortfolioItem 对象，包含市值和盈亏）
     
     Args:
         asset_type: 资产类型过滤 (STK=股票, OPT=期权, ALL=所有)
         
     Returns:
-        仓位列表，包含标的、数量、成本价等信息
+        PortfolioItem 对象列表，包含 contract, position, marketPrice, marketValue,
+        averageCost, unrealizedPNL, realizedPNL 等属性
     """
     try:
         logger.info(f"Fetching positions (asset_type={asset_type})...")
         
-        # Get portfolio items (includes market value)
+        # Get portfolio items (includes market value and P&L)
         portfolio = await ib_client.get_portfolio()
         
-        result = []
-        for item in portfolio:
-            # Filter by asset type
-            if asset_type != "ALL" and item['sec_type'] != asset_type:
-                continue
-            
-            position_data = {
-                'symbol': item['symbol'],
-                'asset_type': item['sec_type'],
-                'position': item['position'],
-                'market_price': item['market_price'],
-                'market_value': item['market_value'],
-                'average_cost': item['avg_cost'],
-                'unrealized_pnl': item['unrealized_pnl'],
-                'realized_pnl': item['realized_pnl'],
-                'unrealized_pnl_pct': (item['unrealized_pnl'] / (abs(item['position']) * item['avg_cost']) * 100) 
-                                      if item['position'] != 0 and item['avg_cost'] != 0 else 0,
-            }
-            
-            # Add option-specific details
-            if item['sec_type'] == 'OPT':
-                contract = item['contract']
-                position_data['expiration'] = getattr(contract, 'lastTradeDateOrContractMonth', 'N/A')
-                position_data['strike'] = getattr(contract, 'strike', 0)
-                position_data['right'] = getattr(contract, 'right', 'N/A')  # C or P
-            
-            result.append(position_data)
+        # Filter by asset type if needed
+        if asset_type != "ALL":
+            portfolio = [p for p in portfolio if p.contract.secType == asset_type]
         
-        logger.info(f"Retrieved {len(result)} positions")
-        return result
+        logger.info(f"Retrieved {len(portfolio)} positions")
+        return portfolio
         
     except Exception as e:
         logger.error(f"Error getting positions: {e}")
-        return [{'error': str(e)}]
+        return []
 
 
-async def get_stock_positions() -> List[Dict[str, Any]]:
+async def get_stock_positions() -> List[PositionStock]:
     """
-    获取股票仓位
+    获取股票仓位（返回原生 PortfolioItem 对象）
     
     Returns:
-        股票仓位列表
+        股票 PortfolioItem 列表
     """
-    return await get_positions(asset_type="STK")
+    ibkr_stock_positions = await _get_positions(asset_type="STK")
+
+    return [
+        PositionStock(
+            detail=StockInfo(
+                symbol=p.contract.symbol,
+                exchange=p.contract.primaryExchange
+            ),
+            position=p.position,
+            market_price=p.marketPrice,
+            market_value=p.marketValue,
+            average_cost=p.averageCost,
+            unrealized_pnl=p.unrealizedPNL,
+            realized_pnl=p.realizedPNL
+        ) for p in ibkr_stock_positions
+    ]
 
 
-async def get_option_positions() -> List[Dict[str, Any]]:
+async def get_option_positions() -> List[PositionOption]:
     """
-    获取期权仓位
+    获取期权仓位（返回原生 PortfolioItem 对象）
     
     Returns:
-        期权仓位列表
+        期权 PortfolioItem 列表
     """
-    return await get_positions(asset_type="OPT")
+    ibkr_option_positions = await _get_positions(asset_type="OPT")
+
+    return [
+        PositionOption(
+            detail=OptionInfo(
+                symbol=p.contract.symbol,
+                exchange=p.contract.primaryExchange,
+                right=p.contract.right,
+                strike=p.contract.strike,
+                expiry=p.contract.expiry
+            ),
+            position=p.position,
+            market_price=p.marketPrice,
+            market_value=p.marketValue,
+            average_cost=p.averageCost,
+            unrealized_pnl=p.unrealizedPNL,
+            realized_pnl=p.realizedPNL
+        ) for p in ibkr_option_positions
+    ]
 
 
-async def get_position_summary() -> Dict[str, Any]:
+async def get_position_summary() -> PositionSummary:
     """
-    获取仓位汇总信息
+    获取仓位汇总信息（返回计算后的 Pydantic Model）
     
     Returns:
-        仓位汇总字典，包含总市值、总盈亏等
+        PositionSummary 对象，包含总市值、总盈亏、仓位占比等计算指标
     """
+
     try:
-        portfolio = await ib_client.get_portfolio()
-        account = await ib_client.get_account_summary()
-        
-        total_market_value = sum(item['market_value'] for item in portfolio)
-        total_unrealized_pnl = sum(item['unrealized_pnl'] for item in portfolio)
-        total_realized_pnl = sum(item['realized_pnl'] for item in portfolio)
-        
-        stock_value = sum(item['market_value'] for item in portfolio if item['sec_type'] == 'STK')
-        option_value = sum(item['market_value'] for item in portfolio if item['sec_type'] == 'OPT')
-        
-        net_liquidation = float(account.get('NetLiquidation', 0))
-        
-        result = {
-            'total_positions': len(portfolio),
-            'stock_positions': len([p for p in portfolio if p['sec_type'] == 'STK']),
-            'option_positions': len([p for p in portfolio if p['sec_type'] == 'OPT']),
-            'total_market_value': total_market_value,
-            'stock_market_value': stock_value,
-            'option_market_value': option_value,
-            'total_unrealized_pnl': total_unrealized_pnl,
-            'total_realized_pnl': total_realized_pnl,
-            'net_liquidation': net_liquidation,
-            'position_pct': (total_market_value / net_liquidation * 100) if net_liquidation > 0 else 0,
-            'stock_pct': (stock_value / net_liquidation * 100) if net_liquidation > 0 else 0,
-            'option_pct': (option_value / net_liquidation * 100) if net_liquidation > 0 else 0,
-        }
-        
-        return result
+        stock_positions = await get_stock_positions()
+        option_positions = await get_option_positions()
+
+        stock_market_value = sum(p.market_value for p in stock_positions)
+        option_market_value = sum(p.market_value for p in option_positions)
+
+        total_unrealized_pnl = sum(p.unrealized_pnl for p in stock_positions) + sum(p.unrealized_pnl for p in option_positions)
+        total_realized_pnl = sum(p.realized_pnl for p in stock_positions) + sum(p.realized_pnl for p in option_positions)
+
+        return PositionSummary(
+            stock_positions=stock_positions,
+            option_positions=option_positions,
+            total_market_value=stock_market_value + option_market_value,
+            stock_market_value=stock_market_value,
+            option_market_value=option_market_value,
+            total_unrealized_pnl=total_unrealized_pnl,
+            total_realized_pnl=total_realized_pnl,
+        )
         
     except Exception as e:
         logger.error(f"Error getting position summary: {e}")
-        return {'error': str(e)}
+        return PositionSummary(
+            stock_positions=[],
+            option_positions=[],
+            total_market_value=0.0,
+            stock_market_value=0.0,
+            option_market_value=0.0,
+            total_unrealized_pnl=0.0,
+            total_realized_pnl=0.0,
+        )

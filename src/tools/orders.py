@@ -1,13 +1,15 @@
 """
 Order management tools (query, place, modify, cancel)
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from datetime import datetime, timedelta
+from ib_insync import Trade
 from src.ib_client import get_ib_client
 from src.cache.db_manager import DatabaseManager
 from src.logger import logger
 from src.config import get_config
 from src.risk.risk_manager import get_risk_manager
+from src.models import OrderResult, ModifyOrderResult, CancelOrderResult
 import json
 
 ib_client = get_ib_client()
@@ -16,22 +18,26 @@ risk_manager = get_risk_manager()
 config = get_config()
 
 
-async def get_open_orders() -> List[Dict[str, Any]]:
+async def get_open_orders() -> List[Trade]:
     """
-    获取当前未成交订单
+    获取当前未成交订单（返回 ib_insync Trade 对象列表）
     
     Returns:
-        未成交订单列表
+        Trade 对象列表，包含以下属性：
+        - contract: 合约信息
+        - order: 订单详情（orderId, action, totalQuantity, orderType 等）
+        - orderStatus: 订单状态（status, filled, remaining 等）
+        - log: 订单日志
     """
     try:
         logger.info("Fetching open orders...")
-        orders = await ib_client.get_open_orders()
-        logger.info(f"Retrieved {len(orders)} open orders")
-        return orders
+        trades = await ib_client.get_open_orders()
+        logger.info(f"Retrieved {len(trades)} open orders")
+        return trades
         
     except Exception as e:
         logger.error(f"Error getting open orders: {e}")
-        return [{'error': str(e)}]
+        return []
 
 
 async def get_order_history(
@@ -39,68 +45,61 @@ async def get_order_history(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     days: int = 7
-) -> List[Dict[str, Any]]:
+) -> List[Trade]:
     """
-    获取历史订单（已成交和已取消）
+    获取历史订单（返回 ib_insync Trade 对象列表）
+    
+    注意：IB API 只能获取当前会话的订单历史，无法获取历史会话的订单
     
     Args:
         symbol: 股票代码过滤（可选）
         start_date: 开始日期（可选）
         end_date: 结束日期（可选）
-        days: 查询天数（默认7天）
+        days: 查询天数（默认7天，仅供参考）
         
     Returns:
-        历史订单列表
+        Trade 对象列表
     """
     try:
         logger.info(f"Fetching order history (symbol={symbol}, days={days})...")
         
-        # Get executed orders from IB
-        orders = await ib_client.get_executed_orders(days=days)
+        # Get all trades from IB (includes filled and partially filled)
+        all_trades = await ib_client.get_trades()
         
         # Filter by symbol if provided
         if symbol:
-            orders = [o for o in orders if o['symbol'] == symbol]
+            all_trades = [t for t in all_trades if t.contract.symbol == symbol]
         
-        # Filter by date if provided
-        if start_date:
-            start_dt = datetime.fromisoformat(start_date)
-            orders = [o for o in orders if datetime.fromisoformat(o['time']) >= start_dt]
+        # Note: Time-based filtering would require accessing trade execution time
+        # which is in the fills. For simplicity, we return all trades.
+        # If strict date filtering is needed, it should be done on the fills.
         
-        if end_date:
-            end_dt = datetime.fromisoformat(end_date)
-            orders = [o for o in orders if datetime.fromisoformat(o['time']) <= end_dt]
-        
-        logger.info(f"Retrieved {len(orders)} historical orders")
-        return orders
+        logger.info(f"Retrieved {len(all_trades)} trades")
+        return all_trades
         
     except Exception as e:
         logger.error(f"Error getting order history: {e}")
-        return [{'error': str(e)}]
+        return []
 
 
-async def get_order_by_id(order_id: int) -> Optional[Dict[str, Any]]:
+async def get_order_by_id(order_id: int) -> Optional[Trade]:
     """
-    根据订单ID获取订单详情
+    根据订单ID获取订单详情（返回 Trade 对象）
     
     Args:
         order_id: 订单ID
         
     Returns:
-        订单详情字典或None
+        Trade 对象或 None
     """
     try:
-        # Check open orders first
-        open_orders = await ib_client.get_open_orders()
-        for order in open_orders:
-            if order['order_id'] == order_id:
-                return order
+        # Get all trades (open + filled)
+        all_trades = await ib_client.get_trades()
         
-        # Check executed orders
-        executed = await ib_client.get_executed_orders(days=30)
-        for order in executed:
-            if order['order_id'] == order_id:
-                return order
+        # Find trade with matching order ID
+        for trade in all_trades:
+            if trade.order.orderId == order_id:
+                return trade
         
         logger.warning(f"Order {order_id} not found")
         return None
@@ -114,7 +113,7 @@ def _log_trading_operation(
     operation: str,
     symbol: str,
     reason: str,
-    risk_checks: List[Any],
+    risk_checks: list,
     result: str,
     order_type: Optional[str] = None,
     action: Optional[str] = None,
@@ -199,8 +198,8 @@ async def place_order(
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     contract_type: str = "STK",
-    option_details: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    option_details: Optional[dict] = None
+) -> OrderResult:
     """
     下单（带风控检查和日志记录）
     
@@ -217,32 +216,32 @@ async def place_order(
         option_details: 期权详情（期权订单必需）
         
     Returns:
-        订单结果字典
+        OrderResult: 订单结果模型
     """
     try:
         logger.info(f"Placing order: {action} {quantity} {symbol} @ {order_type}")
         
         # Validate inputs
         if not reason or reason.strip() == "":
-            return {
-                'success': False,
-                'error': 'Order reason is required (must be provided by AI)',
-                'symbol': symbol
-            }
+            return OrderResult(
+                success=False,
+                error='Order reason is required (must be provided by AI)',
+                symbol=symbol
+            )
         
         if action not in ['BUY', 'SELL']:
-            return {
-                'success': False,
-                'error': f'Invalid action: {action}. Must be BUY or SELL',
-                'symbol': symbol
-            }
+            return OrderResult(
+                success=False,
+                error=f'Invalid action: {action}. Must be BUY or SELL',
+                symbol=symbol
+            )
         
         if order_type not in ['MKT', 'LMT', 'STP', 'STP LMT']:
-            return {
-                'success': False,
-                'error': f'Invalid order type: {order_type}',
-                'symbol': symbol
-            }
+            return OrderResult(
+                success=False,
+                error=f'Invalid order type: {order_type}',
+                symbol=symbol
+            )
         
         # Get account and position data for risk checks
         account_summary = await ib_client.get_account_summary()
@@ -291,13 +290,12 @@ async def place_order(
                 error_message=error_msg
             )
             
-            return {
-                'success': False,
-                'error': 'Order blocked by risk checks',
-                'risk_issues': error_msg,
-                'risk_checks': [c.to_dict() for c in risk_checks],
-                'symbol': symbol
-            }
+            return OrderResult(
+                success=False,
+                error='Order blocked by risk checks',
+                risk_issues=error_msg,
+                symbol=symbol
+            )
         
         # Get warnings (if any)
         warnings = risk_manager.get_warnings(risk_checks)
@@ -308,11 +306,11 @@ async def place_order(
             contract = ib_client.create_stock_contract(symbol)
         elif contract_type == "OPT":
             if not option_details:
-                return {
-                    'success': False,
-                    'error': 'Option details required for option orders',
-                    'symbol': symbol
-                }
+                return OrderResult(
+                    success=False,
+                    error='Option details required for option orders',
+                    symbol=symbol
+                )
             contract = ib_client.create_option_contract(
                 symbol=symbol,
                 expiration=option_details['expiration'],
@@ -320,11 +318,11 @@ async def place_order(
                 right=option_details['right']
             )
         else:
-            return {
-                'success': False,
-                'error': f'Unsupported contract type: {contract_type}',
-                'symbol': symbol
-            }
+            return OrderResult(
+                success=False,
+                error=f'Unsupported contract type: {contract_type}',
+                symbol=symbol
+            )
         
         # Place order with bracket (if stop loss or take profit provided)
         if stop_loss_price or take_profit_price:
@@ -353,17 +351,17 @@ async def place_order(
                     error_message='Failed to place bracket order'
                 )
                 
-                return {
-                    'success': False,
-                    'error': 'Failed to place bracket order',
-                    'symbol': symbol
-                }
+                return OrderResult(
+                    success=False,
+                    error='Failed to place bracket order',
+                    symbol=symbol
+                )
             
             order_id = trades[0].order.orderId
             
         else:
             # Regular order
-            trade = await ib_client.place_order(
+            trade = await ib_client.place_simple_order(
                 contract=contract,
                 action=action,
                 quantity=quantity,
@@ -387,11 +385,11 @@ async def place_order(
                     error_message='Failed to place order'
                 )
                 
-                return {
-                    'success': False,
-                    'error': 'Failed to place order',
-                    'symbol': symbol
-                }
+                return OrderResult(
+                    success=False,
+                    error='Failed to place order',
+                    symbol=symbol
+                )
             
             order_id = trade.order.orderId
         
@@ -412,16 +410,15 @@ async def place_order(
         
         logger.info(f"Order placed successfully: ID={order_id}")
         
-        return {
-            'success': True,
-            'order_id': order_id,
-            'symbol': symbol,
-            'action': action,
-            'quantity': quantity,
-            'order_type': order_type,
-            'warnings': warning_messages,
-            'risk_checks': [c.to_dict() for c in risk_checks]
-        }
+        return OrderResult(
+            success=True,
+            order_id=order_id,
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            order_type=order_type,
+            warnings=warning_messages
+        )
         
     except Exception as e:
         logger.error(f"Error placing order: {e}")
@@ -441,11 +438,11 @@ async def place_order(
             error_message=str(e)
         )
         
-        return {
-            'success': False,
-            'error': str(e),
-            'symbol': symbol
-        }
+        return OrderResult(
+            success=False,
+            error=str(e),
+            symbol=symbol
+        )
 
 
 async def modify_order(
@@ -453,7 +450,7 @@ async def modify_order(
     reason: str,
     new_quantity: Optional[int] = None,
     new_price: Optional[float] = None
-) -> Dict[str, Any]:
+) -> ModifyOrderResult:
     """
     修改订单
     
@@ -464,31 +461,35 @@ async def modify_order(
         new_price: 新价格（可选）
         
     Returns:
-        修改结果字典
+        ModifyOrderResult: 修改结果模型
     """
     try:
         logger.info(f"Modifying order {order_id}...")
         
         if not reason or reason.strip() == "":
-            return {
-                'success': False,
-                'error': 'Modification reason is required',
-                'order_id': order_id
-            }
+            return ModifyOrderResult(
+                success=False,
+                error='Modification reason is required',
+                order_id=order_id
+            )
         
         # Get order details
         order_info = await get_order_by_id(order_id)
         if not order_info:
-            return {
-                'success': False,
-                'error': f'Order {order_id} not found',
-                'order_id': order_id
-            }
+            return ModifyOrderResult(
+                success=False,
+                error=f'Order {order_id} not found',
+                order_id=order_id
+            )
         
-        symbol = order_info.get('symbol', 'UNKNOWN')
+        symbol = order_info.contract.symbol
         
         # Modify order
-        success = await ib_client.modify_order(order_id, new_quantity, new_price)
+        success = await ib_client.modify_simple_order(
+            trade=order_info,
+            new_quantity=new_quantity,
+            new_price=new_price
+        )
         
         # Log operation
         _log_trading_operation(
@@ -505,18 +506,18 @@ async def modify_order(
         
         if success:
             logger.info(f"Order {order_id} modified successfully")
-            return {
-                'success': True,
-                'order_id': order_id,
-                'new_quantity': new_quantity,
-                'new_price': new_price
-            }
+            return ModifyOrderResult(
+                success=True,
+                order_id=order_id,
+                new_quantity=new_quantity,
+                new_price=new_price
+            )
         else:
-            return {
-                'success': False,
-                'error': 'Failed to modify order',
-                'order_id': order_id
-            }
+            return ModifyOrderResult(
+                success=False,
+                error='Failed to modify order',
+                order_id=order_id
+            )
         
     except Exception as e:
         logger.error(f"Error modifying order: {e}")
@@ -531,14 +532,14 @@ async def modify_order(
             error_message=str(e)
         )
         
-        return {
-            'success': False,
-            'error': str(e),
-            'order_id': order_id
-        }
+        return ModifyOrderResult(
+            success=False,
+            error=str(e),
+            order_id=order_id
+        )
 
 
-async def cancel_order(order_id: int, reason: str) -> Dict[str, Any]:
+async def cancel_order(order_id: int, reason: str) -> CancelOrderResult:
     """
     取消订单
     
@@ -547,31 +548,31 @@ async def cancel_order(order_id: int, reason: str) -> Dict[str, Any]:
         reason: 取消原因（AI必须提供）
         
     Returns:
-        取消结果字典
+        CancelOrderResult: 取消结果模型
     """
     try:
         logger.info(f"Cancelling order {order_id}...")
         
         if not reason or reason.strip() == "":
-            return {
-                'success': False,
-                'error': 'Cancellation reason is required',
-                'order_id': order_id
-            }
+            return CancelOrderResult(
+                success=False,
+                error='Cancellation reason is required',
+                order_id=order_id
+            )
         
         # Get order details
-        order_info = await get_order_by_id(order_id)
-        if not order_info:
-            return {
-                'success': False,
-                'error': f'Order {order_id} not found',
-                'order_id': order_id
-            }
+        order_trade = await get_order_by_id(order_id)
+        if not order_trade:
+            return CancelOrderResult(
+                success=False,
+                error=f'Order {order_id} not found',
+                order_id=order_id
+            )
         
-        symbol = order_info.get('symbol', 'UNKNOWN')
+        symbol = order_trade.contract.symbol
         
         # Cancel order
-        success = await ib_client.cancel_order(order_id)
+        success = await ib_client.cancel_order(order_trade.order)
         
         # Log operation
         _log_trading_operation(
@@ -586,17 +587,17 @@ async def cancel_order(order_id: int, reason: str) -> Dict[str, Any]:
         
         if success:
             logger.info(f"Order {order_id} cancelled successfully")
-            return {
-                'success': True,
-                'order_id': order_id,
-                'message': 'Order cancelled'
-            }
+            return CancelOrderResult(
+                success=True,
+                order_id=order_id,
+                message='Order cancelled'
+            )
         else:
-            return {
-                'success': False,
-                'error': 'Failed to cancel order',
-                'order_id': order_id
-            }
+            return CancelOrderResult(
+                success=False,
+                error='Failed to cancel order',
+                order_id=order_id
+            )
         
     except Exception as e:
         logger.error(f"Error cancelling order: {e}")
@@ -611,8 +612,8 @@ async def cancel_order(order_id: int, reason: str) -> Dict[str, Any]:
             error_message=str(e)
         )
         
-        return {
-            'success': False,
-            'error': str(e),
-            'order_id': order_id
-        }
+        return CancelOrderResult(
+            success=False,
+            error=str(e),
+            order_id=order_id
+        )

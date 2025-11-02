@@ -3,8 +3,10 @@ Market data tools for historical K-line data with caching
 """
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
+from pandas import DataFrame
 from src.ib_client import get_ib_client
 from src.cache.db_manager import DatabaseManager
+from src.utils.cache_utils import with_kline_cache
 from src.logger import logger
 
 ib_client = get_ib_client()
@@ -24,6 +26,62 @@ BAR_SIZE_MAP = {
 }
 
 
+async def _fetch_historical_data_from_ib(
+    symbol: str,
+    bar_size: str,
+    duration: str,
+    end_datetime: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Internal function to fetch historical data from IB
+    
+    Args:
+        symbol: Stock symbol
+        bar_size: Bar size in IB format
+        duration: Time duration
+        end_datetime: End datetime (optional)
+        
+    Returns:
+        List of bar data or error dict
+    """
+    try:
+        contract = ib_client.create_stock_contract(symbol)
+        
+        bars = await ib_client.get_historical_data(
+            contract,
+            duration=duration,
+            bar_size=bar_size,
+            what_to_show='TRADES',
+            use_rth=True,
+            end_datetime=end_datetime or ''
+        )
+        
+        if not bars:
+            logger.warning(f"No data returned for {symbol}")
+            return []
+        
+        # Convert BarDataList to list of dicts
+        data = [
+            {
+                'datetime': bar.date.isoformat() if hasattr(bar.date, 'isoformat') else str(bar.date),
+                'open': bar.open,
+                'high': bar.high,
+                'low': bar.low,
+                'close': bar.close,
+                'volume': bar.volume,
+                'average': bar.average,
+                'bar_count': bar.barCount
+            }
+            for bar in bars
+        ]
+        
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error fetching data from IB: {e}")
+        return [{'error': str(e)}]
+
+
+@with_kline_cache()
 async def get_historical_kline(
     symbol: str,
     bar_size: str = '1D',
@@ -34,6 +92,11 @@ async def get_historical_kline(
 ) -> List[Dict[str, Any]]:
     """
     获取历史K线数据（带缓存）
+    
+    缓存逻辑通过装饰器自动处理：
+    - 如果缓存新鲜（<1天），直接返回缓存
+    - 如果缓存过期，获取增量数据并合并
+    - 如果无缓存，获取完整历史数据
     
     Args:
         symbol: 股票代码
@@ -46,91 +109,18 @@ async def get_historical_kline(
     Returns:
         K线数据列表，每项包含 datetime, open, high, low, close, volume
     """
-    try:
-        logger.info(f"Fetching kline data for {symbol} ({bar_size}, {duration})...")
-        
-        # Map bar size to IB format
-        ib_bar_size = BAR_SIZE_MAP.get(bar_size, bar_size)
-        
-        # Check cache first (if not forcing refresh)
-        if use_cache and not force_refresh:
-            cached_data = db.get_kline_data(symbol, bar_size)
-            
-            if cached_data:
-                logger.info(f"Found {len(cached_data)} cached bars for {symbol}")
-                
-                # Check if we need to update with recent data
-                latest_cached = db.get_latest_kline_datetime(symbol, bar_size)
-                
-                if latest_cached:
-                    latest_dt = datetime.fromisoformat(latest_cached)
-                    now = datetime.now()
-                    
-                    # If latest cache is recent (within 1 day), return cached data
-                    if (now - latest_dt).days < 1:
-                        logger.info(f"Cache is up-to-date, returning {len(cached_data)} bars")
-                        return cached_data
-                    
-                    # Otherwise, fetch incremental data
-                    logger.info("Fetching incremental data since last cache...")
-                    contract = ib_client.create_stock_contract(symbol)
-                    
-                    # Calculate duration from latest cache to now
-                    days_diff = (now - latest_dt).days + 1
-                    inc_duration = f"{days_diff} D"
-                    
-                    new_data = await ib_client.get_historical_data(
-                        contract,
-                        duration=inc_duration,
-                        bar_size=ib_bar_size,
-                        what_to_show='TRADES',
-                        use_rth=True
-                    )
-                    
-                    if new_data:
-                        # Save new data to cache
-                        db.save_kline_data(symbol, bar_size, new_data)
-                        
-                        # Merge with cached data (remove duplicates)
-                        existing_dates = {item['datetime'] for item in cached_data}
-                        for bar in new_data:
-                            if bar['datetime'] not in existing_dates:
-                                cached_data.append(bar)
-                        
-                        # Sort by datetime
-                        cached_data.sort(key=lambda x: x['datetime'])
-                        
-                        logger.info(f"Updated cache with {len(new_data)} new bars")
-                    
-                    return cached_data
-        
-        # Fetch full historical data from IB
-        logger.info(f"Fetching full historical data from IB...")
-        contract = ib_client.create_stock_contract(symbol)
-        
-        data = await ib_client.get_historical_data(
-            contract,
-            duration=duration,
-            bar_size=ib_bar_size,
-            what_to_show='TRADES',
-            use_rth=True,
-            end_datetime=end_datetime or ''
-        )
-        
-        if not data:
-            logger.warning(f"No data returned for {symbol}")
-            return []
-        
-        # Save to cache
-        if use_cache:
-            db.save_kline_data(symbol, bar_size, data)
-            logger.info(f"Cached {len(data)} bars for {symbol}")
-        
-        return data
-        
-    except Exception as e:
-        logger.error(f"Error getting kline data: {e}")
-        return [{'error': str(e)}]
+    logger.info(f"Fetching kline data for {symbol} ({bar_size}, {duration})...")
+    
+    # Map bar size to IB format
+    ib_bar_size = BAR_SIZE_MAP.get(bar_size, bar_size)
+    
+    # Fetch data from IB (caching is handled by decorator)
+    return await _fetch_historical_data_from_ib(
+        symbol,
+        ib_bar_size,
+        duration,
+        end_datetime
+    )
 
 
 async def get_daily_kline(symbol: str, days: int = 365) -> List[Dict[str, Any]]:

@@ -1,9 +1,11 @@
 """
 Real-time quote tools
 """
-from typing import Dict, Any, Optional
+from typing import List, Optional, Dict
+from ib_insync import Ticker
 from src.ib_client import get_ib_client
 from src.logger import logger
+from src.models import BidAskSpread
 
 ib_client = get_ib_client()
 
@@ -12,9 +14,9 @@ async def get_last_price(
     symbol: str,
     exchange: str = "SMART",
     session: str = "ALL"
-) -> Dict[str, Any]:
+) -> Optional[Ticker]:
     """
-    获取标的最新价格（快照查询）
+    获取标的最新价格（返回 ib_insync Ticker 对象）
     
     支持盘中、盘前、盘后和夜盘价格
     
@@ -25,82 +27,76 @@ async def get_last_price(
                 注意：IB默认返回所有时段的最新价格
         
     Returns:
-        价格信息字典，包含：
-        - symbol: 股票代码
-        - last: 最新成交价
-        - bid: 买一价
-        - ask: 卖一价
+        Ticker 对象，包含以下属性：
+        - contract: 合约信息
+        - time: 时间戳
+        - bid, ask, last: 买价、卖价、最新价
+        - bidSize, askSize, lastSize: 买量、卖量、成交量
+        - volume: 总成交量
         - close: 上一交易日收盘价
-        - volume: 成交量
-        - time: 价格时间戳
+        - high, low: 最高价、最低价
     """
     try:
         logger.info(f"Fetching last price for {symbol}...")
         
         contract = ib_client.create_stock_contract(symbol, exchange=exchange)
-        price_data = await ib_client.get_market_price(contract)
+        ticker = await ib_client.get_ticker(contract, snapshot=True)
         
-        if not price_data:
-            logger.error(f"Failed to get price for {symbol}")
-            return {
-                'error': 'Failed to fetch price',
-                'symbol': symbol
-            }
+        if not ticker:
+            logger.error(f"Failed to get ticker for {symbol}")
+            return None
         
-        logger.info(f"Retrieved price for {symbol}: {price_data.get('last', 'N/A')}")
-        return price_data
+        logger.info(f"Retrieved ticker for {symbol}: last={ticker.last}")
+        return ticker
         
     except Exception as e:
         logger.error(f"Error getting last price: {e}")
-        return {
-            'error': str(e),
-            'symbol': symbol
-        }
+        return None
 
 
-async def get_multiple_prices(symbols: list[str]) -> Dict[str, Dict[str, Any]]:
+async def get_multiple_prices(symbols: List[str]) -> Dict[str, Optional[Ticker]]:
     """
-    批量获取多个标的的最新价格
+    批量获取多个标的的最新价格（返回 Ticker 对象字典）
     
     Args:
         symbols: 股票代码列表
         
     Returns:
-        字典，键为symbol，值为价格信息
+        字典，键为symbol，值为Ticker对象
     """
     try:
         logger.info(f"Fetching prices for {len(symbols)} symbols...")
         
         result = {}
         for symbol in symbols:
-            price_data = await get_last_price(symbol)
-            result[symbol] = price_data
+            ticker = await get_last_price(symbol)
+            result[symbol] = ticker
         
         return result
         
     except Exception as e:
         logger.error(f"Error getting multiple prices: {e}")
-        return {'error': str(e)}
+        return {}
 
 
-async def get_bid_ask_spread(symbol: str) -> Dict[str, Any]:
+async def get_bid_ask_spread(symbol: str) -> Optional[BidAskSpread]:
     """
-    获取买卖价差信息
+    获取买卖价差信息（返回 Pydantic Model）
     
     Args:
         symbol: 股票代码
         
     Returns:
-        买卖价差信息
+        BidAskSpread 对象
     """
     try:
-        price_data = await get_last_price(symbol)
+        ticker = await get_last_price(symbol)
         
-        if 'error' in price_data:
-            return price_data
+        if not ticker:
+            return None
         
-        bid = price_data.get('bid')
-        ask = price_data.get('ask')
+        bid = ticker.bid
+        ask = ticker.ask
         
         if bid and ask and bid > 0 and ask > 0:
             spread = ask - bid
@@ -109,15 +105,15 @@ async def get_bid_ask_spread(symbol: str) -> Dict[str, Any]:
             spread = None
             spread_pct = None
         
-        return {
-            'symbol': symbol,
-            'bid': bid,
-            'ask': ask,
-            'spread': spread,
-            'spread_pct': spread_pct,
-            'time': price_data.get('time')
-        }
+        return BidAskSpread(
+            symbol=symbol,
+            bid=bid,
+            ask=ask,
+            spread=spread,
+            spread_pct=spread_pct,
+            time=str(ticker.time) if ticker.time else None
+        )
         
     except Exception as e:
         logger.error(f"Error getting bid-ask spread: {e}")
-        return {'error': str(e), 'symbol': symbol}
+        return None

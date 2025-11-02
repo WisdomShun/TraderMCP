@@ -227,6 +227,18 @@ class DatabaseManager:
             result = cursor.fetchone()
             return result[0] if result and result[0] else None
 
+    def get_latest_kline_datetime(self, symbol: str, bar_size: str) -> Optional[str]:
+        """Get the latest datetime for cached K-line data (alias for get_latest_kline_date).
+
+        Args:
+            symbol: Stock symbol
+            bar_size: Bar size
+
+        Returns:
+            Latest datetime string or None if no data
+        """
+        return self.get_latest_kline_date(symbol, bar_size)
+
     # ==================== Trading Logs Methods ====================
 
     def log_trading_operation(

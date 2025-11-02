@@ -7,9 +7,7 @@ from fastmcp import FastMCP
 
 # Import all tool functions
 from src.tools.account import (
-    get_account_summary,
-    get_cash_balance,
-    get_margin_info
+    get_account_summary
 )
 from src.tools.positions import (
     get_positions,
@@ -102,28 +100,6 @@ async def account_summary() -> dict:
         账户摘要字典
     """
     return await get_account_summary()
-
-
-@mcp.tool()
-async def cash_balance() -> dict:
-    """
-    获取现金余额详情
-    
-    Returns:
-        现金信息字典
-    """
-    return await get_cash_balance()
-
-
-@mcp.tool()
-async def margin_info() -> dict:
-    """
-    获取保证金信息
-    
-    Returns:
-        保证金信息字典
-    """
-    return await get_margin_info()
 
 
 # ==================== Position Tools ====================

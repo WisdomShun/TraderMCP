@@ -7,8 +7,8 @@ import nest_asyncio
 nest_asyncio.apply()
 
 from src.ib_client import get_ib_client
-from src.tools.account import get_account_summary, get_cash_balance
-from src.tools.positions import get_positions, get_position_summary
+from src.tools.account import get_account_summary
+from src.tools.positions import get_stock_positions, get_option_positions, get_position_summary
 from src.tools.orders import place_order, get_open_orders, cancel_order
 from src.tools.market_data import get_daily_kline
 from src.tools.quotes import get_last_price
@@ -25,24 +25,34 @@ async def example_account_query():
     print("示例 1: 账户查询")
     print("="*80)
     
-    # 获取账户摘要
+    # 获取账户摘要（返回 AccountSummary Pydantic Model）
     summary = await get_account_summary()
     print(f"\n账户摘要:")
-    print(f"  净资产: ${summary['net_liquidation']:,.2f}")
-    print(f"  现金: ${summary['total_cash']:,.2f}")
-    print(f"  可用资金: ${summary['available_funds']:,.2f}")
-    print(f"  购买力: ${summary['buying_power']:,.2f}")
+    print(f"  账户: {summary.account}")
+    print(f"  净资产: ${summary.net_liquidation:,.2f}")
+    print(f"  现金: ${summary.total_cash:,.2f}")
+    print(f"  可用资金: ${summary.available_funds:,.2f}")
+    print(f"  购买力: ${summary.buying_power:,.2f}")
     
-    # 获取仓位
-    positions = await get_positions()
-    print(f"\n持仓数量: {len(positions)}")
+    # 获取仓位（返回 List[PortfolioItem] - ib_insync 原生对象）
+    positions = await get_position_summary()
+    print(f"\n持仓详情:\n {positions}")
+
+    a = 1
     
-    if positions and 'error' not in positions[0]:
-        for pos in positions[:5]:  # 显示前5个仓位
-            print(f"\n  {pos['symbol']} ({pos['asset_type']}):")
-            print(f"    数量: {pos['position']}")
-            print(f"    市值: ${pos['market_value']:,.2f}")
-            print(f"    盈亏: ${pos['unrealized_pnl']:,.2f} ({pos['unrealized_pnl_pct']:.2f}%)")
+    # if positions:
+    #     for pos in positions[:5]:  # 显示前5个仓位
+    #         # PortfolioItem 属性: contract, position, marketPrice, marketValue, 
+    #         # averageCost, unrealizedPNL, realizedPNL, account
+    #         symbol = pos.contract.symbol
+    #         sec_type = pos.contract.secType
+    #         unrealized_pct = (pos.unrealizedPNL / (abs(pos.position) * pos.averageCost) * 100) \
+    #             if pos.position != 0 and pos.averageCost != 0 else 0
+            
+    #         print(f"\n  {symbol} ({sec_type}):")
+    #         print(f"    数量: {pos.position}")
+    #         print(f"    市值: ${pos.marketValue:,.2f}")
+    #         print(f"    盈亏: ${pos.unrealizedPNL:,.2f} ({unrealized_pct:.2f}%)")
 
 
 async def example_market_data():
@@ -53,13 +63,16 @@ async def example_market_data():
     
     symbol = "AAPL"
     
-    # 获取实时报价
-    price = await get_last_price(symbol)
-    print(f"\n{symbol} 实时报价:")
-    print(f"  最新价: ${price.get('last', 'N/A')}")
-    print(f"  买价: ${price.get('bid', 'N/A')}")
-    print(f"  卖价: ${price.get('ask', 'N/A')}")
-    print(f"  时间: {price.get('time', 'N/A')}")
+    # # 获取实时报价（返回 Ticker 对象）
+    # ticker = await get_last_price(symbol)
+    # if ticker:
+    #     print(f"\n{symbol} 实时报价:")
+    #     print(f"  最新价: ${ticker.last if ticker.last else 'N/A'}")
+    #     print(f"  买价: ${ticker.bid if ticker.bid else 'N/A'}")
+    #     print(f"  卖价: ${ticker.ask if ticker.ask else 'N/A'}")
+    #     print(f"  时间: {ticker.time}")
+    # else:
+    #     print(f"⚠️ 无法获取 {symbol} 的报价")
     
     # 获取日K线（最近30天）
     print(f"\n获取 {symbol} 日K线数据...")
@@ -85,40 +98,42 @@ async def example_trading():
     
     symbol = "AAPL"
     
-    # 获取当前价格
-    price_data = await get_last_price(symbol)
-    current_price = price_data.get('last')
+    # # 获取当前价格（返回 Ticker 对象）
+    # ticker = await get_last_price(symbol)
+    # current_price = ticker.last if ticker and ticker.last else None
     
-    if not current_price:
-        print("无法获取当前价格，跳过交易示例")
-        return
+    # if not current_price:
+    #     print("无法获取当前价格，跳过交易示例")
+    #     return
+
+    current_price = 250.0
     
     print(f"\n{symbol} 当前价格: ${current_price:.2f}")
     
     # 计算止损价（-5%）
     stop_loss = current_price * 0.95
     
-    # 下单示例（仅演示，不实际执行）
-    print(f"\n演示下单（不实际执行）:")
-    print(f"  标的: {symbol}")
-    print(f"  方向: BUY")
-    print(f"  数量: 10股")
-    print(f"  订单类型: 限价单")
-    print(f"  价格: ${current_price:.2f}")
-    print(f"  止损价: ${stop_loss:.2f}")
-    print(f"  原因: 技术分析显示支撑位强劲，风险回报比合适")
+    # # 下单示例（仅演示，不实际执行）
+    # print(f"\n演示下单（不实际执行）:")
+    # print(f"  标的: {symbol}")
+    # print(f"  方向: BUY")
+    # print(f"  数量: 10股")
+    # print(f"  订单类型: 限价单")
+    # print(f"  价格: ${current_price:.2f}")
+    # print(f"  止损价: ${stop_loss:.2f}")
+    # print(f"  原因: 技术分析显示支撑位强劲，风险回报比合适")
     
     # 如果要实际下单，取消下面的注释
-    # result = await place_order(
-    #     symbol=symbol,
-    #     action="BUY",
-    #     quantity=10,
-    #     order_type="LMT",
-    #     limit_price=current_price,
-    #     stop_loss_price=stop_loss,
-    #     reason="技术分析显示支撑位强劲，风险回报比合适"
-    # )
-    # print(f"\n下单结果: {result}")
+    result = await place_order(
+        symbol=symbol,
+        action="BUY",
+        quantity=10,
+        order_type="LMT",
+        limit_price=current_price,
+        stop_loss_price=stop_loss,
+        reason="技术分析显示支撑位强劲，风险回报比合适"
+    )
+    print(f"\n下单结果: {result}")
     
     # 查询未成交订单
     open_orders = await get_open_orders()

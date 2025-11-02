@@ -2,11 +2,10 @@
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import List, Optional
 
 from ib_insync import IB, Contract, Stock, Option, Order, Trade, BarDataList
-from ib_insync import util
+from ib_insync import AccountValue, Position, PortfolioItem, OptionChain, OptionComputation, Ticker
 
 from .config import get_config
 
@@ -118,53 +117,44 @@ class IBClient:
 
     # ==================== Account & Position Methods ====================
 
-    async def get_account_values(self, account: Optional[str] = None) -> List:
-        """Get account values.
-
-        Args:
-            account: Account number (uses config default if None)
-
-        Returns:
-            List of account values
-        """
-        await self.ensure_connected()
-        account = account or self.config.ib_account
-        return self.ib.accountValues(account)
-
-    async def get_account_summary(self, account: Optional[str] = None) -> dict:
+    async def get_account_summary(self, account: Optional[str] = None) -> List[AccountValue]:
         """Get account summary with key metrics.
 
         Args:
             account: Account number (uses config default if None)
 
         Returns:
-            Dictionary with account metrics
+            List of AccountValue objects from ib_insync
         """
         await self.ensure_connected()
         account = account or self.config.ib_account
+        return self.ib.accountSummary(account)
 
-        summary = {}
-        for item in self.ib.accountSummary(account):
-            summary[item.tag] = {
-                "value": item.value,
-                "currency": item.currency,
-                "account": item.account,
-            }
-
-        return summary
-
-    async def get_positions(self, account: Optional[str] = None) -> List:
+    async def get_positions(self, account: Optional[str] = None) -> List[Position]:
         """Get current positions.
 
         Args:
             account: Account number (uses config default if None)
 
         Returns:
-            List of positions
+            List of Position objects (basic position info)
         """
         await self.ensure_connected()
         account = account or self.config.ib_account
         return [p for p in self.ib.positions() if p.account == account]
+
+    async def get_portfolio(self, account: Optional[str] = None) -> List[PortfolioItem]:
+        """Get portfolio items with market values and P&L.
+
+        Args:
+            account: Account number (uses config default if None)
+
+        Returns:
+            List of PortfolioItem objects (includes marketValue, unrealizedPNL, etc.)
+        """
+        await self.ensure_connected()
+        account = account or self.config.ib_account
+        return [p for p in self.ib.portfolio() if p.account == account]
 
     # ==================== Order Methods ====================
 
@@ -186,12 +176,13 @@ class IBClient:
         await self.ensure_connected()
         return self.ib.trades()
 
-    async def place_order(self, contract: Contract, order: Order) -> Trade:
+    async def place_order(self, contract: Contract, order: Order, timeout: float = 5.0) -> Trade:
         """Place an order.
 
         Args:
             contract: Contract to trade
             order: Order details
+            timeout: Timeout in seconds (default: 5.0)
 
         Returns:
             Trade object
@@ -199,30 +190,42 @@ class IBClient:
         await self.ensure_connected()
         trade = self.ib.placeOrder(contract, order)
 
-        # Wait for order to be submitted
-        await asyncio.sleep(0.5)
+        # Wait for order status update using event mechanism
+        try:
+            await asyncio.wait_for(trade.statusEvent, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for order status for {contract}")
+        
         return trade
 
-    async def modify_order(self, trade: Trade, order: Order) -> Trade:
+    async def modify_order(self, trade: Trade, order: Order, timeout: float = 5.0) -> Trade:
         """Modify an existing order.
 
         Args:
             trade: Existing trade
             order: Modified order
+            timeout: Timeout in seconds (default: 5.0)
 
         Returns:
             Updated trade object
         """
         await self.ensure_connected()
         self.ib.placeOrder(trade.contract, order)
-        await asyncio.sleep(0.5)
+        
+        # Wait for order status update using event mechanism
+        try:
+            await asyncio.wait_for(trade.statusEvent, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for order modification status")
+        
         return trade
 
-    async def cancel_order(self, order: Order) -> bool:
+    async def cancel_order(self, order: Order, timeout: float = 5.0) -> bool:
         """Cancel an order.
 
         Args:
             order: Order to cancel
+            timeout: Timeout in seconds (default: 5.0)
 
         Returns:
             True if cancelled successfully
@@ -230,10 +233,201 @@ class IBClient:
         await self.ensure_connected()
         try:
             self.ib.cancelOrder(order)
-            await asyncio.sleep(0.5)
+            
+            # Find the trade for this order to wait for status update
+            trade = next((t for t in self.ib.trades() if t.order.orderId == order.orderId), None)
+            if trade:
+                try:
+                    await asyncio.wait_for(trade.statusEvent, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout waiting for order cancellation status")
+            
             return True
         except Exception as e:
             logger.error(f"Failed to cancel order {order.orderId}: {e}")
+            return False
+
+    # ==================== Convenience Order Methods ====================
+
+    async def place_simple_order(
+        self,
+        contract: Contract,
+        action: str,
+        quantity: int,
+        order_type: str = "MKT",
+        limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        timeout: float = 5.0
+    ) -> Optional[Trade]:
+        """Place a simple order with common parameters.
+
+        Args:
+            contract: Contract to trade
+            action: 'BUY' or 'SELL'
+            quantity: Number of shares/contracts
+            order_type: 'MKT', 'LMT', 'STP', 'STP LMT'
+            limit_price: Limit price (required for LMT and STP LMT orders)
+            stop_price: Stop price (required for STP and STP LMT orders)
+            timeout: Timeout in seconds (default: 5.0)
+
+        Returns:
+            Trade object or None if failed
+        """
+        from ib_insync import MarketOrder, LimitOrder, StopOrder, StopLimitOrder
+
+        # Create order based on type
+        if order_type == "MKT":
+            order = MarketOrder(action, quantity)
+        elif order_type == "LMT":
+            if limit_price is None:
+                logger.error("Limit price required for limit order")
+                return None
+            order = LimitOrder(action, quantity, limit_price)
+        elif order_type == "STP":
+            if stop_price is None:
+                logger.error("Stop price required for stop order")
+                return None
+            order = StopOrder(action, quantity, stop_price)
+        elif order_type == "STP LMT":
+            if limit_price is None or stop_price is None:
+                logger.error("Both limit and stop price required for stop-limit order")
+                return None
+            order = StopLimitOrder(action, quantity, stop_price, limit_price)
+        else:
+            logger.error(f"Unsupported order type: {order_type}")
+            return None
+
+        return await self.place_order(contract, order, timeout)
+
+    async def place_bracket_order(
+        self,
+        contract: Contract,
+        action: str,
+        quantity: int,
+        entry_price: Optional[float] = None,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        timeout: float = 5.0
+    ) -> Optional[List[Trade]]:
+        """Place a bracket order (entry + stop loss + take profit).
+
+        Args:
+            contract: Contract to trade
+            action: 'BUY' or 'SELL'
+            quantity: Number of shares/contracts
+            entry_price: Entry limit price (None for market order)
+            stop_loss_price: Stop loss price
+            take_profit_price: Take profit price
+            timeout: Timeout in seconds (default: 5.0)
+
+        Returns:
+            List of Trade objects [parent, stop_loss, take_profit] or None
+        """
+        from ib_insync import MarketOrder, LimitOrder, Order
+
+        await self.ensure_connected()
+
+        try:
+            # Create parent order
+            if entry_price:
+                parent = LimitOrder(action, quantity, entry_price)
+            else:
+                parent = MarketOrder(action, quantity)
+
+            parent.transmit = False  # Don't transmit until children are set
+
+            # Determine child action (opposite of parent)
+            child_action = 'SELL' if action == 'BUY' else 'BUY'
+
+            # Create take profit order
+            take_profit = None
+            if take_profit_price:
+                take_profit = LimitOrder(child_action, quantity, take_profit_price)
+                take_profit.parentId = parent.orderId
+                take_profit.transmit = False
+
+            # Create stop loss order
+            stop_loss = None
+            if stop_loss_price:
+                from ib_insync import StopOrder
+                stop_loss = StopOrder(child_action, quantity, stop_loss_price)
+                stop_loss.parentId = parent.orderId
+                stop_loss.transmit = True  # Transmit all when last one is set
+
+            # If no children, just transmit parent
+            if not take_profit and not stop_loss:
+                parent.transmit = True
+                trade = await self.place_order(contract, parent, timeout)
+                return [trade] if trade else None
+
+            # Place orders
+            trades = []
+            parent_trade = self.ib.placeOrder(contract, parent)
+            trades.append(parent_trade)
+
+            if take_profit:
+                take_profit.parentId = parent_trade.order.orderId
+                tp_trade = self.ib.placeOrder(contract, take_profit)
+                trades.append(tp_trade)
+
+            if stop_loss:
+                stop_loss.parentId = parent_trade.order.orderId
+                if not take_profit:
+                    stop_loss.transmit = True
+                sl_trade = self.ib.placeOrder(contract, stop_loss)
+                trades.append(sl_trade)
+            elif take_profit:
+                # If no stop loss, make sure take profit transmits
+                take_profit.transmit = True
+
+            # Wait for parent order status
+            try:
+                await asyncio.wait_for(parent_trade.statusEvent, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for bracket order status")
+
+            return trades
+
+        except Exception as e:
+            logger.error(f"Failed to place bracket order: {e}")
+            return None
+
+    async def modify_simple_order(
+        self,
+        trade: Trade,
+        new_quantity: Optional[int] = None,
+        new_price: Optional[float] = None,
+        timeout: float = 5.0
+    ) -> bool:
+        """Modify an existing order with simple parameters.
+
+        Args:
+            trade: Existing trade to modify
+            new_quantity: New quantity (None to keep current)
+            new_price: New price (None to keep current)
+            timeout: Timeout in seconds (default: 5.0)
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Clone the order
+            order = trade.order
+            
+            # Modify parameters
+            if new_quantity is not None:
+                order.totalQuantity = new_quantity
+            if new_price is not None:
+                if hasattr(order, 'lmtPrice'):
+                    order.lmtPrice = new_price
+                elif hasattr(order, 'auxPrice'):
+                    order.auxPrice = new_price
+
+            # Place modified order
+            await self.modify_order(trade, order, timeout)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to modify order: {e}")
             return False
 
     # ==================== Market Data Methods ====================
@@ -277,12 +471,13 @@ class IBClient:
             logger.error(f"Failed to get historical data for {contract}: {e}")
             return []
 
-    async def get_ticker(self, contract: Contract, snapshot: bool = True) -> Optional:
+    async def get_ticker(self, contract: Contract, snapshot: bool = True, timeout: float = 5.0) -> Optional[Ticker]:
         """Get ticker data (market data snapshot).
 
         Args:
             contract: Contract
             snapshot: If True, returns snapshot and unsubscribes
+            timeout: Timeout in seconds (default: 5.0)
 
         Returns:
             Ticker object or None
@@ -291,9 +486,14 @@ class IBClient:
 
         try:
             if snapshot:
-                self.ib.reqMktData(contract, snapshot=True)
-                await asyncio.sleep(2)  # Wait for data
-                ticker = self.ib.ticker(contract)
+                ticker = self.ib.reqMktData(contract, snapshot=True)
+                
+                # Wait for ticker to be updated using event mechanism
+                try:
+                    await asyncio.wait_for(ticker.updateEvent, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout waiting for ticker data for {contract}")
+                
                 self.ib.cancelMktData(contract)
                 return ticker
             else:
@@ -304,7 +504,7 @@ class IBClient:
 
     async def get_option_chains(
         self, symbol: str, exchange: str = "SMART"
-    ) -> Optional[object]:
+    ) -> Optional[List[OptionChain]]:
         """Get option chains for a symbol.
 
         Args:
@@ -333,11 +533,12 @@ class IBClient:
             logger.error(f"Failed to get option chains for {symbol}: {e}")
             return None
 
-    async def get_option_greeks(self, contract: Contract) -> Optional[dict]:
+    async def get_option_greeks(self, contract: Contract, timeout: float = 5.0) -> Optional[OptionComputation]:
         """Get option Greeks.
 
         Args:
             contract: Option contract
+            timeout: Timeout in seconds (default: 5.0)
 
         Returns:
             Dictionary with Greeks or None
@@ -345,20 +546,18 @@ class IBClient:
         await self.ensure_connected()
 
         try:
-            self.ib.reqMktData(contract, genericTickList="106", snapshot=False)
-            await asyncio.sleep(2)
-            ticker = self.ib.ticker(contract)
+            ticker = self.ib.reqMktData(contract, genericTickList="106", snapshot=False)
+            
+            # Wait for ticker to be updated with Greeks data using event mechanism
+            try:
+                await asyncio.wait_for(ticker.updateEvent, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout waiting for Greeks data for {contract}")
+            
             self.ib.cancelMktData(contract)
 
-            if ticker and ticker.modelGreeks:
-                greeks = ticker.modelGreeks
-                return {
-                    "delta": greeks.delta,
-                    "gamma": greeks.gamma,
-                    "theta": greeks.theta,
-                    "vega": greeks.vega,
-                    "implied_volatility": ticker.impliedVolatility,
-                }
+            if ticker:
+                return ticker.modelGreeks
             return None
         except Exception as e:
             logger.error(f"Failed to get Greeks for {contract}: {e}")
