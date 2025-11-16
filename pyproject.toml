@@ -1,0 +1,47 @@
+[project]
+name = "trader-mcp"
+version = "0.1.0"
+description = "Interactive Brokers MCP Server - FastMCP based trading integration"
+authors = [
+    {name = "WisdomShun"}
+]
+requires-python = ">=3.8"
+dependencies = [
+    "fastmcp>=0.2.0",
+    "ib_insync>=0.9.86",
+    "pandas>=2.0.0",
+    "pandas-market-calendars>=4.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "nest_asyncio",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
