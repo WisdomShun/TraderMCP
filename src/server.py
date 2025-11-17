@@ -324,11 +324,11 @@ async def test_server():
 
 if __name__ == "__main__":
     logger.info("Starting IBTraderMCP server...")
-    # mcp.run(
-    #     transport="streamable-http",
-    #     host="127.0.0.1",
-    #     port=4211,
-    #     path="/ibkr",
-    #     log_level="debug",
-    # )
-    asyncio.run(test_server())
+    mcp.run(
+        transport="streamable-http",
+        host=ib_client.config.mcp_address,
+        port=ib_client.config.mcp_port,
+        path=ib_client.config.mcp_path,
+        log_level="debug",
+    )
+    # asyncio.run(test_server())

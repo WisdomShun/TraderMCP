@@ -23,6 +23,11 @@ class Config(BaseSettings):
     ib_client_id: int = Field(default=1, description="IB client ID")
     ib_account: str = Field(default="", description="IB account number")
 
+    # MCP Server Configuration
+    mcp_address: str = Field(default="127.0.0.1", description="MCP server address")
+    mcp_port: int = Field(default=4211, description="MCP server port")
+    mcp_path: str = Field(default="/ibkr", description="MCP server path")
+
     # Cache & Database
     cache_db_path: str = Field(default="./data/trading.db", description="SQLite database path")
     cache_kline_days: int = Field(default=365, description="K-line cache duration in days")
