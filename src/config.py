@@ -19,7 +19,9 @@ class Config(BaseSettings):
 
     # IB Gateway Connection
     ib_host: str = Field(default="127.0.0.1", description="IB Gateway host")
-    ib_port: int = Field(default=7497, description="IB Gateway port")
+    ib_api_port_live: int = Field(default=4003, description="IB API port for live trading")
+    ib_api_port_paper: int = Field(default=4004, description="IB API port for paper trading")
+    trading_mode: str = Field(default="paper", description="Trading mode: paper or live")
     ib_client_id: int = Field(default=1, description="IB client ID")
     ib_account: str = Field(default="", description="IB account number")
 
@@ -59,8 +61,10 @@ class Config(BaseSettings):
         """Validate IB connection configuration."""
         if not self.ib_account:
             raise ValueError("IB_ACCOUNT must be set in environment")
-        if not 1024 <= self.ib_port <= 65535:
-            raise ValueError("IB_PORT must be between 1024 and 65535")
+        if not 1 <= self.ib_api_port_live <= 65535:
+            raise ValueError("ib_api_port_live must be between 1 and 65535")
+        if not 1 <= self.ib_api_port_paper <= 65535:
+            raise ValueError("ib_api_port_paper must be between 1 and 65535")
         return True
 
 

@@ -24,6 +24,13 @@ class IBClient:
         self.ib.disconnectedEvent += self._on_disconnected
         self.ib.connectedEvent += self._on_connected
 
+    def get_ib_port(self) -> int:
+        """Get the IB API port based on trading mode."""
+        if self.config.trading_mode == "live":
+            return self.config.ib_api_port_live
+        else:
+            return self.config.ib_api_port_paper
+
     async def connect(self) -> bool:
         """Connect to IB Gateway with retry logic.
 
@@ -35,16 +42,18 @@ class IBClient:
 
         retry_delay = 5  # seconds between retries
         attempt = 0
+
+        ib_port = self.get_ib_port()
         
         while True:
             attempt += 1
             try:
                 logger.info(
-                    f"Connect to IB Gateway at {self.config.ib_host}:{self.config.ib_port} (attempt {attempt})"
+                    f"Connect to IB Gateway at {self.config.ib_host}:{ib_port} (attempt {attempt})"
                 )
                 await self.ib.connectAsync(
                     host=self.config.ib_host,
-                    port=self.config.ib_port,
+                    port=ib_port,
                     clientId=self.config.ib_client_id,
                     account=self.config.ib_account,
                     readonly=True,
@@ -78,7 +87,7 @@ class IBClient:
 
     def _on_connected(self):
         """Handle connection event."""
-        logger.info(f"Connected to IB Gateway at {self.config.ib_host}:{self.config.ib_port}")
+        logger.info(f"Connected to IB Gateway at {self.config.ib_host}:{self.get_ib_port()}")
         self._auto_reconnect = True
         if self.reconnect_task is not None:
             self.reconnect_task.cancel()

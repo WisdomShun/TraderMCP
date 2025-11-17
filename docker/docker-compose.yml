@@ -1,0 +1,51 @@
+services:
+  # IB Gateway service (from ib_tws directory)
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ib-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${IB_API_PORT_LIVE:-4003}:4003"
+      - "${IB_API_PORT_PAPER:-4004}:4004"
+      - "${IB_VNC_PORT:-5900}:5900"
+    networks:
+      - trader-network
+
+  # TraderMCP Server
+  trader-mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: trader-mcp
+    restart: unless-stopped
+    depends_on:
+      - ib-gateway
+    env_file:
+      - .env
+    environment:
+      # Override: IB_HOST must point to the ib-gateway container
+      IB_HOST: ib-gateway
+    ports:
+      - "${MCP_PORT:-4211}:4211"
+    volumes:
+      # Persist data and logs
+      - ../data:/app/data
+      - ../logs:/app/logs
+    networks:
+      - trader-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4211"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  trader-network:
+    driver: bridge
+
+volumes:
+  trader-data:
+  trader-logs:
