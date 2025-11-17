@@ -8,8 +8,7 @@ from ib_insync import IB, Contract, Stock, Option, BarDataList
 from ib_insync import AccountValue, Position, PortfolioItem, OptionChain, OptionComputation, Ticker
 
 from .config import get_config
-
-logger = logging.getLogger(__name__)
+from .logger import logger
 
 
 class IBClient:
@@ -19,56 +18,72 @@ class IBClient:
         """Initialize IB client."""
         self.config = get_config()
         self.ib = IB()
-        self._connected = False
+        self.reconnect_task = None
+        self._auto_reconnect = True
+        # 注册断线事件处理器
+        self.ib.disconnectedEvent += self._on_disconnected
+        self.ib.connectedEvent += self._on_connected
 
     async def connect(self) -> bool:
-        """Connect to IB Gateway.
+        """Connect to IB Gateway with retry logic.
 
         Returns:
             True if connected successfully
         """
-        if self._connected:
+        if self.ib.isConnected():
             return True
 
-        try:
-            await self.ib.connectAsync(
-                host=self.config.ib_host,
-                port=self.config.ib_port,
-                clientId=self.config.ib_client_id,
-                timeout=20,
-            )
-            self._connected = True
-            logger.info(
-                f"Connected to IB Gateway at {self.config.ib_host}:{self.config.ib_port}"
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to connect to IB Gateway: {e}")
-            self._connected = False
-            return False
-
-    async def requestAccountUpdates(self, account: Optional[str] = "All"):
-        """Request account updates. then you can get portfolio and positions updates.
-
-        Args:
-            subscribe: If True, subscribe to updates; else unsubscribe
-            account: Account number (uses config default if None)
-        """
-        await self.ensure_connected()
-        account = account or self.config.ib_account
-        await self.ib.reqAccountUpdatesAsync(account)
+        retry_delay = 5  # seconds between retries
+        attempt = 0
+        
+        while True:
+            attempt += 1
+            try:
+                logger.info(
+                    f"Connect to IB Gateway at {self.config.ib_host}:{self.config.ib_port} (attempt {attempt})"
+                )
+                await self.ib.connectAsync(
+                    host=self.config.ib_host,
+                    port=self.config.ib_port,
+                    clientId=self.config.ib_client_id,
+                    account=self.config.ib_account,
+                    readonly=True,
+                    timeout=20,
+                )
+                return True
+            except Exception as e:
+                logger.warning(f"Failed : {e}. Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
 
     async def disconnect(self):
         """Disconnect from IB Gateway."""
-        if self._connected:
+        # 禁用自动重连
+        self._auto_reconnect = False
+        
+        if self.ib.isConnected():
             self.ib.disconnect()
-            self._connected = False
             logger.info("Disconnected from IB Gateway")
 
     async def ensure_connected(self):
         """Ensure connection is active, reconnect if needed."""
-        if not self._connected or not self.ib.isConnected():
+        if not self.ib.isConnected():
             await self.connect()
+
+    def _on_disconnected(self):
+        """Handle disconnection event and trigger reconnection."""
+        logger.warning("Connection lost")
+        if self.reconnect_task is None and self._auto_reconnect:
+            logger.info("Triggering reconnection...")
+            self.reconnect_task = asyncio.create_task(self.connect(), name="IBClientReconnectTask")
+
+    def _on_connected(self):
+        """Handle connection event."""
+        logger.info(f"Connected to IB Gateway at {self.config.ib_host}:{self.config.ib_port}")
+        self._auto_reconnect = True
+        if self.reconnect_task is not None:
+            self.reconnect_task.cancel()
+            self.reconnect_task = None
+
 
     # ==================== Contract Creation Helpers ====================
 
@@ -152,7 +167,7 @@ class IBClient:
         """
         await self.ensure_connected()
         account = account or self.config.ib_account
-        return [p for p in self.ib.positions() if p.account == account]
+        return [p for p in self.ib.positions() if p.account == account or account == "All"]
 
     async def get_portfolio(self, account: Optional[str] = None) -> List[PortfolioItem]:
         """Get portfolio items with market values and P&L.
@@ -165,7 +180,7 @@ class IBClient:
         """
         await self.ensure_connected()
         account = account or self.config.ib_account
-        return [p for p in self.ib.portfolio() if p.account == account]
+        return [p for p in self.ib.portfolio() if p.account == account or account == "All"]
 
     # ==================== Market Data Methods ====================
 
@@ -331,7 +346,7 @@ class IBClient:
         Returns:
             True if connected
         """
-        return self._connected and self.ib.isConnected()
+        return self.ib.isConnected()
 
     async def __aenter__(self):
         """Context manager entry."""

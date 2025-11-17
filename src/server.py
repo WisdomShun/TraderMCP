@@ -48,27 +48,14 @@ config = get_config()
 async def lifespan(app):
     """Manage IB Gateway connection lifecycle"""
     # Startup
-    logger.info("IBTraderMCP server starting...")
-    logger.info(f"Connecting to IB Gateway at {config.ib_host}:{config.ib_port}...")
-    
-    success = await ib_client.connect()
-    if success:
-        logger.info("Successfully connected to IB Gateway")
-    else:
-        logger.error("Failed to connect to IB Gateway - some functions may not work")
-
-    account_updates_success = await ib_client.requestAccountUpdates()
-    if account_updates_success:
-        logger.info("Requested account updates successfully")
-    else:
-        logger.error("Failed to request account updates")
+    logger.info("IBTraderMCP server starting...")    
+    await ib_client.connect()
     
     yield
     
     # Shutdown
     logger.info("IBTraderMCP server shutting down...")
     ib_client.disconnect()
-    logger.info("Disconnected from IB Gateway")
 
 
 # Create FastMCP server with lifespan
@@ -301,12 +288,6 @@ async def analyst_reports(symbol: str) -> dict:
 async def test_server():
     await ib_client.connect()
 
-    account_updates_success = await ib_client.requestAccountUpdates()
-    if account_updates_success:
-        logger.info("Requested account updates successfully")
-    else:
-        logger.error("Failed to request account updates")
-    
     """Run the MCP server for testing"""
     account_summary = await get_account_summary()
     logger.info(f"Account Summary: {account_summary}")
@@ -343,11 +324,11 @@ async def test_server():
 
 if __name__ == "__main__":
     logger.info("Starting IBTraderMCP server...")
-    mcp.run(
-        transport="streamable-http",
-        host="127.0.0.1",
-        port=4211,
-        path="/ibkr",
-        log_level="debug",
-    )
-    # asyncio.run(test_server())
+    # mcp.run(
+    #     transport="streamable-http",
+    #     host="127.0.0.1",
+    #     port=4211,
+    #     path="/ibkr",
+    #     log_level="debug",
+    # )
+    asyncio.run(test_server())

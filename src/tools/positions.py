@@ -25,7 +25,7 @@ async def _get_positions(asset_type: Optional[str] = "ALL") -> List[PortfolioIte
         logger.info(f"Fetching positions (asset_type={asset_type})...")
         
         # Get portfolio items (includes market value and P&L)
-        positions = await ib_client.get_portfolio()
+        positions = await ib_client.get_portfolio(ib_client.config.ib_account)
         
         # Filter by asset type if needed
         if asset_type != "ALL":
